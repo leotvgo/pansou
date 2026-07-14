@@ -158,7 +158,7 @@ func FetchHTML(targetURL string) (string, error) {
 
 // BuildSearchURL 构建搜索URL
 func BuildSearchURL(channel string, keyword string, nextPageParam string) string {
-	baseURL := "https://t.me/s/" + channel
+	baseURL := config.AppConfig.TGBaseURL + channel
 	if keyword != "" {
 		baseURL += "?q=" + url.QueryEscape(keyword)
 		if nextPageParam != "" {

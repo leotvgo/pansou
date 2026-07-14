@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"log"
 )
 
 // Config 应用配置结构
@@ -47,6 +48,8 @@ type Config struct {
 	HTTPWriteTimeout time.Duration // 写入超时
 	HTTPIdleTimeout  time.Duration // 空闲超时
 	HTTPMaxConns     int           // 最大连接数
+	// Telegram搜索配置
+	TGBaseURL string // Telegram基础URL，默认 https://t.me/s/
 	// 认证相关配置
 	AuthEnabled     bool              // 是否启用认证
 	AuthUsers       map[string]string // 用户名:密码映射
@@ -95,6 +98,8 @@ func Init() {
 		AsyncMaxBackgroundTasks:   getAsyncMaxBackgroundTasks(),
 		AsyncCacheTTLHours:        getAsyncCacheTTLHours(),
 		AsyncLogEnabled:           getAsyncLogEnabled(),
+		// Telegram搜索配置
+		TGBaseURL: getTGBaseURL(),
 		// HTTP服务器配置
 		HTTPReadTimeout:  getHTTPReadTimeout(),
 		HTTPWriteTimeout: getHTTPWriteTimeout(),
@@ -526,6 +531,18 @@ func getAsyncLogEnabled() bool {
 		return true // 解析失败时默认启用
 	}
 	return enabled
+}
+
+// 从环境变量获取Telegram基础URL，如果未设置则使用默认值
+func getTGBaseURL() string {
+	baseURL := os.Getenv("TG_BASE_URL")
+	if baseURL == "" {
+		return "https://t.me/s/"
+	}
+	if !strings.HasSuffix(baseURL, "/") {
+		baseURL += "/"
+	}
+	return baseURL
 }
 
 // 从环境变量获取认证开关，如果未设置则默认关闭
