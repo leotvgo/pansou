@@ -1092,10 +1092,13 @@ func mergeResultsByType(results []model.SearchResult, keyword string, cloudTypes
 				}
 			}
 
-			// 关键词过滤：现在我们有了准确的链接-标题对应关系，只需检查每个链接的具体标题
+			// TG搜索由Telegram按完整消息匹配；标题提取不完整时回退检查正文，避免误删。
 			if !skipKeywordFilter && keyword != "" {
-				// 只检查链接的具体标题，无论是TG来源还是插件来源
-				if !strings.Contains(strings.ToLower(title), lowerKeyword) {
+				matchesKeyword := strings.Contains(strings.ToLower(title), lowerKeyword)
+				if !matchesKeyword && result.Channel != "" {
+					matchesKeyword = strings.Contains(strings.ToLower(result.Content), lowerKeyword)
+				}
+				if !matchesKeyword {
 					continue
 				}
 			}

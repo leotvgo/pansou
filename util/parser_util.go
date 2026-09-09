@@ -2,11 +2,18 @@ package util
 
 import (
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/PuerkitoBio/goquery"
 	"pansou/model"
+)
+
+var (
+	telegramBreakPattern      = regexp.MustCompile(`(?i)<br\s*/?>`)
+	telegramDateHeaderPattern = regexp.MustCompile(`^(?:\d{4}年)?\d{1,2}月\d{1,2}日$`)
 )
 
 // normalizeUrl 标准化URL，将URL编码的中文部分解码为中文，用于去重
@@ -182,8 +189,8 @@ func ParseSearchResults(html string, channel string) ([]model.SearchResult, stri
 		// 获取消息文本的HTML内容
 		messageHTML, _ := messageTextElem.Html()
 
-		// 获取消息的纯文本内容
-		messageText := messageTextElem.Text()
+		// 获取消息的纯文本内容，并保留Telegram使用<br>表达的换行
+		messageText := extractTextWithLineBreaks(messageHTML, messageTextElem.Text())
 
 		// 提取标题
 		title := extractTitle(messageHTML, messageText)
@@ -616,75 +623,75 @@ func extractImageURLFromStyle(style string) string {
 
 // extractTitle 从消息HTML和文本内容中提取标题
 func extractTitle(htmlContent string, textContent string) string {
-	// 从HTML内容中提取标题
-	if brIndex := strings.Index(htmlContent, "<br"); brIndex > 0 {
-		// 提取<br>前的HTML内容
-		firstLineHTML := htmlContent[:brIndex]
+	messageText := extractTextWithLineBreaks(htmlContent, textContent)
+	lines := strings.Split(messageText, "\n")
+	firstNonEmpty := ""
 
-		// 创建一个文档来解析这个HTML片段
-		doc, err := goquery.NewDocumentFromReader(strings.NewReader("<div>" + firstLineHTML + "</div>"))
-		if err == nil {
-			// 获取解析后的文本
-			firstLine := strings.TrimSpace(doc.Text())
-
-			// 如果第一行以"名称："开头，则提取冒号后面的内容作为标题
-			if strings.HasPrefix(firstLine, "名称：") {
-				return strings.TrimSpace(firstLine[len("名称："):])
-			}
-
-			// 如果第一行只是标签(以#开头)，尝试从第二行提取
-			if strings.HasPrefix(firstLine, "#") && !strings.Contains(firstLine, "名称") {
-				// 继续从文本内容提取
-			} else {
-				return firstLine
-			}
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
 		}
-	}
-
-	// 如果HTML解析失败，则使用纯文本内容
-	lines := strings.Split(textContent, "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-
-	// 第一行通常是标题
-	firstLine := strings.TrimSpace(lines[0])
-
-	// 如果第一行只是标签(以#开头且不包含实际内容)，尝试从第二行或"名称："字段提取
-	if strings.HasPrefix(firstLine, "#") {
-		// 检查是否有"名称："字段
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "名称：") {
-				return strings.TrimSpace(line[len("名称："):])
-			}
+		if firstNonEmpty == "" {
+			firstNonEmpty = line
 		}
 
-		// 如果没有"名称："字段，尝试使用第二行
-		if len(lines) > 1 {
-			secondLine := strings.TrimSpace(lines[1])
-			if strings.HasPrefix(secondLine, "名称：") {
-				return strings.TrimSpace(secondLine[len("名称："):])
-			}
-			// 如果第二行不是空的且不是标签，使用第二行
-			if secondLine != "" && !strings.HasPrefix(secondLine, "#") {
-				result := secondLine
-				result = CutTitleByKeywords(result, []string{"简介", "描述"})
-				return result
-			}
+		candidate := trimLeadingTitleDecorations(line)
+		if candidate == "" || isTelegramDateHeader(line, candidate) {
+			continue
 		}
+
+		// 纯标签行不是标题，继续寻找下一条有效文本。
+		if strings.HasPrefix(candidate, "#") && !strings.Contains(candidate, "名称") {
+			continue
+		}
+
+		if strings.HasPrefix(candidate, "名称：") {
+			return strings.TrimSpace(candidate[len("名称："):])
+		}
+		if strings.HasPrefix(candidate, "名称:") {
+			return strings.TrimSpace(candidate[len("名称:"):])
+		}
+
+		return CutTitleByKeywords(candidate, []string{"简介", "描述"})
 	}
 
-	// 如果第一行以"名称："开头，则提取冒号后面的内容作为标题
-	if strings.HasPrefix(firstLine, "名称：") {
-		return strings.TrimSpace(firstLine[len("名称："):])
+	return trimLeadingTitleDecorations(firstNonEmpty)
+}
+
+// extractTextWithLineBreaks 将Telegram消息HTML转换为保留换行的纯文本。
+func extractTextWithLineBreaks(htmlContent string, fallback string) string {
+	if htmlContent == "" {
+		return fallback
 	}
 
-	// 否则直接使用第一行作为标题
-	result := firstLine
-	// 统一裁剪：遇到简介/描述等关键字时，只保留前半部分
-	result = CutTitleByKeywords(result, []string{"简介", "描述"})
-	return result
+	htmlWithBreaks := telegramBreakPattern.ReplaceAllString(htmlContent, "\n")
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader("<div>" + htmlWithBreaks + "</div>"))
+	if err != nil {
+		return fallback
+	}
+
+	text := doc.Text()
+	if strings.TrimSpace(text) == "" {
+		return fallback
+	}
+	return text
+}
+
+func trimLeadingTitleDecorations(line string) string {
+	return strings.TrimSpace(strings.TrimLeftFunc(line, func(r rune) bool {
+		return unicode.IsSpace(r) ||
+			unicode.Is(unicode.So, r) ||
+			unicode.Is(unicode.Sk, r) ||
+			unicode.Is(unicode.Mn, r)
+	}))
+}
+
+func isTelegramDateHeader(original string, candidate string) bool {
+	hasCalendarMarker := strings.Contains(original, "📅") ||
+		strings.Contains(original, "🗓") ||
+		strings.Contains(original, "📆")
+	return hasCalendarMarker && telegramDateHeaderPattern.MatchString(candidate)
 }
 
 // extractWorkTitlesForLinks 为每个链接提取作品标题
